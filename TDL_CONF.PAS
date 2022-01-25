@@ -28,6 +28,14 @@ type
     x1,y1,x2,y2:byte;
   end;
 
+  colorscheme=record
+    Border,Title,Icon,HiHot,HiNorm,LoHot,LoNorm,Off:Byte;
+    WinBorder,WinBody,WinIcon,WinTitle:byte;
+    FavIcon, UnpIcon:byte;
+    MiSTerTurbo,MiSTerSlow,MiSTerMedium,MiSTerFast:byte;
+    Mouse:byte;
+  end;
+
   (*
   {holds character "backfore" color attribute choices}
   colorchoices=record
@@ -77,7 +85,26 @@ type
     freeLowDOSRam:word;                 {in paragraphs; 0 if we couldn't determine}
     EMSatStartup,
     XMSatStartup:longint;
-
+    MiSterTurbo:boolean;
+    MiSTerSlow:word;
+    MiSTerMedium:word;
+    MiSTerFast:word;
+    colors:colorscheme;
+    listSortField:byte;
+    listSortAscend:boolean;
+    disableBlink:boolean;
+    header:string[50];
+    Joystick:Boolean;
+    JoyDebug:Boolean;
+    JoyAutoCalibrate:Boolean;
+    JoyAxisACentMax:word;
+    JoyAxisACentMin:word;
+    JoyAxisBCentMax:word;
+    JoyAxisBCentMin:word;
+    favIcon:Char;
+    unpIcon:Char;
+    MouseChar:Byte;
+    persistSelected:Byte;
     Constructor Init(cfile,bdir:PathStr);
 
     Function FilesIDXLoc:PathStr;
@@ -122,6 +149,19 @@ var
       else isPositive:=false;
   end;
 
+  Function getSortField(s:string):byte;
+  {var
+     str:string;}
+  begin
+    {str := upstring(s)}
+    if     (s = 'DOS' ) then getSortField  :=  $00
+    else if(s = 'NAME') then getSortField  :=  $01
+    else if(s = 'EXT' ) then getSortField  :=  $02
+    else if(s = 'SIZE') then getSortField  :=  $03
+    else if(s = 'TIME') then getSortField  :=  $04
+    else                       getSortField  :=  $01;
+  end;
+
 begin
   Inherited Init;
   {Grab startup dir so we can chdir back to it at exit}
@@ -156,6 +196,49 @@ begin
   readonly:=false;
   preloading:=true;
   progLocs:='files';
+  header           := TDLTitle;
+  MiSterSlow       :=$A1A1;
+  MiSterMedium     :=$A1A0;
+  MiSterFast       :=$A100;
+  MiSterTurbo      :=true;
+  disableBlink     :=false;
+  listSortField    :=1;
+  listSortAscend   :=true;
+  joystick         :=false;
+  joyDebug         :=false;
+  joyAutoCalibrate :=true;
+  joyAxisACentMin  :=130;
+  joyAxisACentMax  :=400;
+  joyAxisBCentMin  :=130;
+  joyAxisBCentMax  :=400;
+  favIcon          :=favIconDft;
+  unpIcon          :=unpIconDft;
+  persistSelected  :=0;
+  MouseChar        :=$02;
+
+  with colors do
+  begin
+    Mouse          := $4f;
+    Border         := $1b;
+    Title          := $1e;
+    Icon           := $7f;
+    HiHot          := $21;
+    HiNorm         := $2f;
+    LoHot          := $1e;
+    LoNorm         := $17;
+    Off            := $19;
+    WinBorder      := $19;
+    WinBody        := $1e;
+    WinIcon        := $1e;
+    WinTitle       := $1b;
+    FavIcon        := $1c; {bright red foreground}
+    UnpIcon        := $19; {bright blue foreground}
+    MiSTerTurbo    := Title;
+    MiSTerSlow     := (MiSTerTurbo and $f0) or $02;
+    MiSterMedium   := (MiSTerTurbo and $f0) or $0e;
+    MiSterFast     := (MiSTerTurbo and $f0) or $0c;
+  end;
+
   datacacheDir:='cache.dir';
   swapDir:='.';
   {set initial title list to start one row down}
@@ -214,14 +297,54 @@ begin
         if upstring(value)='REGULAR' then userlevel:=regular;
         if upstring(value)='POWER' then userlevel:=power;
       end;
-      if upstring(key)='SWAPPING' then swapping:=isPositive(value);
-      if upstring(key)='AUDITING' then auditing:=isPositive(value);
-      if upstring(key)='PAUSEAFTERRUN' then pauseAfterRun:=isPositive(value);
-      if upstring(key)='FORCELOGGING' then logging:=isPositive(value);
-      if upstring(key)='PRELOADING' then preloading:=isPositive(value);
-      if upstring(key)='CACHESCAN' then startupCacheScan:=isPositive(value);
-      if upstring(key)='VESA' then customvidmode:=hexStrToLong(upstring(value));
-      if upstring(key)='SUBHEADER' then begin
+      with colors do
+      begin
+        if upstring(key)='COLOR_MOUSE'         then Mouse        :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_BORDER'        then Border       :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_TITLE'         then Title        :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_ICON'          then Icon         :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_HIHOT'         then HiHot        :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_HINORM'        then HiNorm       :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_LOHOT'         then LoHot        :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_LONORM'        then LoNorm       :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_OFF'           then Off          :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_WIN_BORDER'    then WinBorder    :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_WIN_BODY'      then WinBody      :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_WIN_ICON'      then WinIcon      :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_WIN_TITLE'     then WinTitle     :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_FAV_ICON'      then FavIcon      :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_UNP_ICON'      then UnpIcon      :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_MISTER_TURBO'  then MiSTerTurbo  :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_MISTER_SLOW'   then MiSTerSlow   :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_MISTER_MEDIUM' then MiSTerMedium :=hexStrToLong(upstring(value));
+        if upstring(key)='COLOR_MISTER_FAST'   then MiSTerFast   :=hexStrToLong(upstring(value));
+      end;
+      if upstring(key)='FAVICON'         then favIcon          := Char(hexStrToLong(upstring(value)));
+      if upstring(key)='UNPICON'         then unpIcon          := Char(hexStrToLong(upstring(value)));
+      if upstring(key)='LISTSORTFIELD'   then listSortField    := getSortField(upstring(value));
+      if upstring(key)='LISTSORTASCEND'  then listSortAscend   := isPositive(value);
+      if upstring(key)='DISABLEBLINK'    then disableBlink     := isPositive(value);
+      if upstring(key)='SWAPPING'        then swapping         := isPositive(value);
+      if upstring(key)='AUDITING'        then auditing         := isPositive(value);
+      if upstring(key)='PAUSEAFTERRUN'   then pauseAfterRun    := isPositive(value);
+      if upstring(key)='FORCELOGGING'    then logging          := isPositive(value);
+      if upstring(key)='PRELOADING'      then preloading       := isPositive(value);
+      if upstring(key)='CACHESCAN'       then startupCacheScan := isPositive(value);
+      if upstring(key)='JOYSTICK'        then Joystick         := isPositive(value);
+      if upstring(key)='JOYAUTOCAL'      then JoyAutoCalibrate := isPositive(value);
+      if upstring(key)='MISTERTURBO'     then MiSTerTurbo      := isPositive(value);
+      if upstring(key)='VESA'            then customvidmode    := hexStrToLong(upstring(value));
+      if upstring(key)='MISTERSLOW'      then MiSTerSlow       := hexStrToLong(upstring(value));
+      if upstring(key)='MISTERMEDIUM'    then MiSTerMedium     := hexStrToLong(upstring(value));
+      if upstring(key)='MISTERFAST'      then MiSTerFast       := hexStrToLong(upstring(value));
+      if upstring(key)='JOYAXISACENTMIN' then joyAxisACentMin  := hexStrToLong(upstring(value));
+      if upstring(key)='JOYAXISACENTMAX' then joyAxisACentMax  := hexStrToLong(upstring(value));
+      if upstring(key)='JOYAXISBCENTMIN' then joyAxisBCentMin  := hexStrToLong(upstring(value));
+      if upstring(key)='JOYAXISBCENTMAX' then joyAxisBCentMax  := hexStrToLong(upstring(value));
+      if upstring(key)='PERSISTSELECTED' then persistSelected  := hexStrToLong(value);
+      if upstring(key)='MOUSECHAR'       then MouseChar        := hexStrToLong(upstring(value));
+      if upstring(key)='HEADER'          then header           := value;
+      if upstring(key)='SUBHEADER'       then begin
         {leading spaces are truncated -- we will put one back unless
         leading char is a colon, which should not have a leading space}
         subheader:=value;

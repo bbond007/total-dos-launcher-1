@@ -80,6 +80,8 @@ procedure pauseForUser; {uses DOS and BIOS only}
 procedure tmpScreenSave;
 procedure tmpScreenRestore;
 function setVESA(mode:word):word;
+procedure enableBlink;
+procedure disableBlink;
 
 implementation
 
@@ -108,6 +110,24 @@ asm
         mov     mode,2
 @done:
         mov     ax,mode
+end;
+
+procedure enableBlink;
+begin
+  asm
+    mov ax, 1003h
+    mov bx, 1
+    int 10h
+  end;
+end;
+
+procedure disableBlink;
+begin
+  asm
+    mov ax, 1003h
+    mov bx, 0
+    int 10h
+  end;
 end;
 
 procedure die(s:string);

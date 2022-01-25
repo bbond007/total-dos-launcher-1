@@ -394,3 +394,86 @@ hardware environments are no longer sold or maintained.  Emulators are
 unparalleled for their accessibility.  But, as good as emulators are,
 the only way to truly research a historical work is to experience
 it on the hardware that work targeted.
+
+Additional INI options in BBond007 "MiSTer" version fork:  
+---------------------------------------------------------
+
+;Change favorite ico - default heart=3h
+
+favicon=21
+
+;Set the colors for TDL's Menu:
+
+COLOR_Border=9fh
+ 
+COLOR_Title=0fh
+ 
+COLOR_Icon=7fh
+ 
+COLOR_HiHot=9fh
+ 
+COLOR_HiNorm=f9h
+ 
+COLOR_LoHot=9ah
+ 
+COLOR_LoNorm=9fh
+ 
+COLOR_Off=9fh
+ 
+COLOR_Win_Border=70h
+ 
+COLOR_Win_Body=9fh
+
+COLOR_Win_Icon=9fh
+ 
+COLOR_Win_Title=0fh
+ 
+COLOR_Fav_Icon=94h
+ 
+COLOR_UNP_Icon=98h
+
+;DisableBlink -- turn off blinking characters for 8 additional background colors
+ 
+DisableBlink=FALSE
+
+;COLOR_MiSTer_Turbo defines background color for Slow/Medium/Fast
+ 
+COLOR_MiSTer_Turbo=9fh
+ 
+COLOR_MiSTer_Slow=92h 
+ 
+COLOR_MiSter_Medium=9eh
+ 
+COLOR_MiSter_Fast=9ch
+
+;Disable the Turbo option in TDL, F3 to hot cycle through Turbo option 
+ 
+MiSTerTurbo=TRUE
+
+;Sort Field -- Dos/Name/Ext/Size/Time
+ 
+istSortField=Name
+
+;Sort Order -- Ascending = True, Descending = False
+ 
+ListSortAscend=TRUE
+
+;Turn on joystick control in TDL
+ 
+joystick=true
+
+;Optional Joystick Axis settings, leave undefined for autodetect
+ 
+;JoyAxisACentMin=64h
+ 
+;JoyAxisACentMax=2bch
+ 
+;JoyAxisBCentMin=64h
+ 
+;JoyAxisBCentMax=2bch
+ 
+;Mouse options, some Char examples - 12h, 09h, default 02h
+ 
+Color_Mouse=$4fh
+  
+MouseChar=02h

@@ -16,7 +16,9 @@ supporting code) in its own unit allows us to:
 interface
 
 Procedure PrintHelp;
-Function Launch(tid:word):boolean;
+function  Launch(tid:word;
+                 pcursor,
+                 pwinloc:Longint ):boolean;
 procedure TDL_Init;
 procedure TDL_EventLoop;
 procedure TDL_Done;
@@ -25,6 +27,7 @@ implementation
 
 uses
   DOS,
+  joylib,
   support,
   strings,
   cmdlin,
@@ -53,12 +56,85 @@ type
     x,y:byte;
   end;
 
+  pcursorLoc=record
+     pcursor,
+     pwinloc:Longint;
+  end;
+
 var
   jcloc:txtcoords; {jumpcursor location}
 
 var
   titleSets:array[0..maxTitleSets-1] of PTitleSet;
   titleMetadata:PMetadata;
+  MiSTerSpeed:Byte;
+  startVmode:Byte;
+
+procedure PrintPressAnyKey;
+begin
+  writeln('Hit a key to continue TDL startup.');
+end;
+
+procedure Joystick_Init(bQuiet:Boolean);
+
+var
+  JoyAxisACenter, JoyAxisBCenter:word;
+
+begin
+  key.vJoystick := config^.Joystick;
+
+  if (key.vJoystick) then
+  begin
+
+    JoyAxisACenter := JoystickPosition(JoystickAAxisX);
+    JoyAxisBCenter := JoystickPosition(JoystickAAxisY);
+
+    if (JoyAxisACenter = $FFFF) or
+       (JoyAxisACenter = $FFFF) or
+       JoystickButton(JoystickAButton2)
+       then
+    begin
+      if not bQuiet then
+        writeln('Joystick not detected. Disabled!');
+      key.vJoystick    := false;
+      config^.Joystick := false;
+    end
+    else
+    begin
+      if (config^.JoyAutoCalibrate) then
+      begin
+        config^.JoyAxisACentMin := JoyAxisACenter - (JoyAxisACenter div 2);
+        config^.JoyAxisACentMax := JoyAxisACenter + (JoyAxisACenter div 2);
+        config^.JoyAxisBCentMin := JoyAxisBCenter - (JoyAxisBCenter div 2);
+        config^.JoyAxisBCentMax := JoyAxisBCenter + (JoyAxisBCenter div 2);
+      end;
+
+      key.vJoyAxisACentMin := config^.JoyAxisACentMin;
+      key.vJoyAxisACentMax := config^.JoyAxisACentMax;
+      key.vJoyAxisBCentMin := config^.JoyAxisBCentMin;
+      key.vJoyAxisBCentMax := config^.JoyAxisBCentMax;
+
+      if(not bQuiet or config^.JoyDebug) then
+      begin;
+        writeln('Enabling (expeirmental) joystick support:');
+        if (config^.JoyAutoCalibrate) then
+          writeln('Auto-calibrating joystick...');
+        writeln('  - Axis X cen min ', #26, ' ', key.vJoyAxisACentMin);
+        writeln('  - Axis X cen max ', #26, ' ', key.vJoyAxisACentMax);
+        writeln('  - Axis X cur pos ', #26, ' ', JoyAxisACenter);
+        writeln('  - Axis Y cen min ', #26, ' ', key.vJoyAxisBCentMin);
+        writeln('  - Axis Y cen max ', #26, ' ', key.vJoyAxisBCentMax);
+        writeln('  - Axis Y cur pos ', #26, ' ', JoyAxisBCenter);
+      end;
+    end; {joystick detected}
+
+    if(config^.JoyDebug) then
+    begin
+      PrintPressAnyKey;
+      key.getinput;
+    end;
+  end; {key.vJoystick}
+end;
 
 procedure TDL_Init;
 {
@@ -76,13 +152,37 @@ var
   w:word;
   {wantNlines:byte;}
   tf:PFileStruct;
+  bQuiet:Boolean;
+
+  procedure quietwriteln(str:String);
+  begin
+    if not (bQuiet) then
+      writeln(str);
+  end;
+
+  procedure quietwrite(str:String);
+  begin
+    if not (bQuiet) then
+      write(str);
+  end;
 
 begin
   {If user requested help, then print it and exit}
   if is_param('?') or is_param('h')
     then PrintHelp;
+  MiSterSpeed:=0;
 
   RecordDOSScreen;
+
+  if is_param('q') then
+    bQuiet:=true
+  else
+    bQuiet:=false;
+
+  {
+  if not (bQuiet) then
+    writeln('Current screen mode '#26' ',oldScreenParams.videomode);
+  }
 
   {determine TDL base directory and configuration file to use:
   sf = startup configuration file
@@ -91,8 +191,11 @@ begin
   if non_flag_count>1 then sd:=non_flag_param(2) else sd:='';
   sd:=StdPath(FExpand(sd));
   {attempt TDL config init}
-  writeln('Configuring '+TDLtitle+'.  Use "-h" for command-line options.');
-  writeln('Reading '+sf+'...');
+
+  quietwriteln('Configuring launcher.  Use "-h" for command-line options.');
+{ quietwriteln('Configuring '+TDLtitle+'.  Use "-h" for command-line options.'); }
+
+  quietwriteln('Reading '+sf+'...');
   config:=new(pconfig,init(sf,sd));
   if config=nil
     then fatalerror(1,'Error while configuring; check '+sd+'\'+sf);
@@ -102,10 +205,17 @@ begin
   if is_param('r') then config^.readonly:=true;
   if is_param('c') then config^.wantCondensed:=true;
   if is_param('f') then config^.wantSnow:=true;
-  if is_param('s') then config^.wantAuditExport:=true;
+  if is_param('j') then config^.Joystick := true;
+  if is_param('k') then
+  begin
+    config^.JoyDebug := true;
+    config^.Joystick := true;
+  end;
+{ if is_param('s') then config^.wantAuditExport:=true; } (*not working*)
 
   {attempt TDL handlers init}
-  writeln('Registering handlers from handlers.ini...');
+
+  quietwriteln('Registering handlers from handlers.ini...');
   Handlers:=new(PHandlers,init(config^.basedir+'handlers.ini'));
   {We can only show files properly for up to 42 filemasks.  If we have
   more handlers than that, switch to power user mode so that we only have
@@ -136,33 +246,38 @@ begin
   config^.EMSatStartup:=ems_memavail;
   config^.XMSatStartup:=xms_memavail;
 
+  Joystick_Init(bQuiet);
+
   {attempt initializing indexes}
-  writeln('Initializing files index...');
+
+  quietwriteln('Initializing files index...');
   files:=new(PFileIndex,
          init(config^.baseDir+config^.filesIDXname,config^.preloading));
   if files=nil then fatalerror(1,'Files index init failed');
-  writeln('Initializing titles index...');
+  quietwriteln('Initializing titles index...');
   titles:=new(PTitleIndex,
           init(config^.baseDir+config^.titlesIDXname,config^.preloading));
   if titles=nil then fatalerror(1,'Titles index init failed');
 
-  write('Title metadata: ');
+  quietwrite('Title metadata: ');
   temps:=stdpath(sd)+'titles.dat';
 
   if config^.readonly then begin
-    writeln('Read-only mode: disabled');
+    quietwriteln('Read-only mode: disabled');
     titleMetadata:=new(PMetadata,init('',config^.numTitles));
   end else begin
-    writeln('Initializing using '+temps);
+    quietwriteln('Initializing using '+temps);
     titleMetadata:=new(PMetadata,init(temps,config^.numTitles));
   end;
 
   {Ensure cache size is known before continuing}
-  writeln('Inspecting file cache at ',fileCache^.path);
+  if not (bQuiet) then
+    writeln('Inspecting file cache at ',fileCache^.path);
   fileCache^.Remaining;
-  writeln(fileCache^.megsfree,' MB available for cache use.');
+  if not (bQuiet) then
+    writeln(fileCache^.megsfree,' MB available for cache use.');
   if config^.startupCacheScan then begin
-    write('Validating cache entries...');
+    quietwrite('Validating cache entries...');
     for w:=0 to config^.numtitles-1 do begin
       if titleMetadata^.getFlag(w,m_unpacked)=true then begin
         files^.retrieve(w,tf);
@@ -172,8 +287,9 @@ begin
         end;
       end;
     end;
-    writeln('done.');
+    {quiet}writeln('done.');
   end;
+
 
   if (config^.userlevel=power) or (config^.edebug=true) then begin
     writeln('Performing additional checks:');
@@ -198,10 +314,10 @@ begin
       writeln('Cache Directory: ',fileCache^.path);
       writeln('Startup Directory: ',startupDir);
     end;
-    writeln('Hit a key to continue TDL startup.');
+    PrintPressAnyKey;
     asm
-        xor     ax,ax
-        int     16h
+      xor     ax,ax
+      int     16h
     end;
   end;
 
@@ -248,12 +364,27 @@ begin
     dispose(monitor,done);
 
     SysInit;
-    Mouse.init;
     fastInit;
+    {Mouse.init; }
+    {Mouse.Show; }
+
+
   end;
   {set a marker for 40-col mode}
   if Monitor^.width=40
     then config^.customVidMode:=40;
+
+
+
+
+  Mouse.done;
+  Mouse.init;
+  Mouse.SetMouseCursorStyle(config^.MouseChar,
+                            config^.Colors.Mouse);
+  Mouse.Show;
+  if (screen.depth > 25) then
+    mouse.EnableSoftMouseHack(screen.width,screen.depth);
+  Mouse.Confine(1,1,screen.width,screen.depth);
 
   {
   Customize color choices.  For MDA, make selected/special text black on white, everything else white on black.
@@ -265,10 +396,14 @@ begin
   {SetWindow(Border,Body,Icons,Title:byte);}
   if Monitor^.ColorOn
     then begin
-      LookTOT^.SetMenu($1b,$1e,$7f,$31,$3f,$1e,$17,$19);
-      LookTOT^.SetWindow($19,$1e,$1e,$1b);
-      faviconcol:=$1c; {bright red foreground}
-      unpiconcol:=$19; {bright blue foreground}
+      {LookTOT^.SetMenu($1b,$1e,$7f,$31,$3f,$1e,$17,$19);}
+      with config^.colors do
+      begin
+        LookTOT^.SetMenu(Border,Title,Icon,HiHot,HiNorm,LoHot,LoNorm,Off);
+        LookTOT^.SetWindow(WinBorder,WinBody,WinIcon,WinTitle);
+        faviconcol:=FavIcon;
+        unpiconcol:=UnpIcon;
+      end;
     end else begin
       LookTOT^.SetMenu($0F,$09,$78,$78,$70,$01,$07,$07);
     end;
@@ -280,11 +415,11 @@ begin
     tpos.x2:=screen.width;
     screen.clear(LookTOT^.vMenuBorder,#0);
     {If provided a subheader in TDL.INI, use it.  Truncate if necessary.}
-    temps:=TDLTitle + config^.subheader;
+    temps:=config^.header + config^.subheader;
     if length(temps) > screen.width-1
       then temps[0]:=char(screen.width-1);
     screen.WriteCenter(1,LookTOT^.vMenuTitle,temps);
-    jcloc.x:=17;
+    jcloc.x:=16;
     jcloc.y:=tpos.y1-2;
     screen.WriteAt(1,tpos.y1-2,LookTOT^.vMenuLoNorm,jumplabel); screen.gotoxy(jcloc.x,jcloc.y);
     screen.WriteAt(1,tpos.y1-1,LookTOT^.vMenuLoNorm,'Or, choose from the following programs:');
@@ -323,6 +458,10 @@ begin
     end;
   end;
 
+
+  if(config^.disableBlink) then
+    disableBlink;
+
 end;
 
 Procedure PrintHelp;
@@ -345,7 +484,10 @@ begin
     db '        This may cause "snow" or display corruption on true CGA adapters.',0dh,0ah
 (*  db '-nXX    Override screen detection and force XX lines onscreen.',0dh,0ah
     db '        Debugging option; submit an issue if you''re forced to use this.',0dh,0ah*)
-    db '-s      Export the AUDIT.DAT audit log to .CSV format.',0dh,0ah
+(*  db '-s      Export the AUDIT.DAT audit log to .CSV format.',0dh,0ah *)
+    db '-j      Enable Joystick support.',0dh,0ah
+    db '-k      Enable Joystick support with debug.',0dh,0ah
+    db '-q      Use quiet startup mode.',0dh,0ah
     db 0ah,'$'
 
 @start:
@@ -440,7 +582,150 @@ begin
 end;
 
 
-function Launch(tid:word):boolean;
+Procedure setMiSTerSpeed(speed:Byte);
+begin
+  case speed of
+    0:PORTW[$8888]:=config^.MiSterFast;
+    1:PORTW[$8888]:=config^.MiSterSlow;
+    2:PORTW[$8888]:=config^.MiSterMedium;
+  end;
+  {
+  begin
+    asm
+     mov DX, $8888
+     mov AX, $A1A1
+     out DX, AX
+     end;
+  end;
+  }
+end;
+
+(* Old TXT for testing)
+
+procedure savePos(pcursor,
+                  pwinloc:Longint);
+var
+  saveFile:Text;
+begin
+  Assign(saveFile, config^.exepath + CursorFileName);
+  Rewrite(saveFile);
+  WriteLn(saveFile, pCursor);
+  WriteLn(saveFile, pwinloc);
+  Close(saveFile);
+end;
+
+procedure restorePos(var pCursor:Longint;
+                     var pwinloc:Longint;
+                       maxcursor:LongInt);
+var
+  str:String[10];
+  Code: Integer;
+  saveFile:Text;
+  pwheight:Byte;
+
+  procedure setDefault;
+  begin
+    pcursor := 0;
+    pwinloc := 0;
+  end;
+
+begin
+  if (config^.persistSelected = 1) or
+     (config^.persistSelected = 2) then
+  begin
+    Assign(saveFile, config^.exepath + CursorFileName);
+    {$I-}
+    Reset(saveFile);
+    {$I+}
+    if IOResult = 0 then
+    begin
+      ReadLn(saveFile,str);
+      Val(str, pcursor, Code);
+      if (Code <> 0) then
+        setDefault;
+      ReadLn(saveFile,str);
+      Val(str, pwinloc, Code);
+      if (Code <> 0) then
+        setDefault;
+      Close(saveFile);
+      pwheight:=config^.tpos.y2-config^.tpos.y1-1;
+      if(pcursor > maxcursor) or
+        (pwinloc > maxcursor - pwheight) then
+        setDefault;
+    end
+    else
+      setDefault;
+  end
+  else
+    setDefault;
+
+end;
+*)
+
+procedure savePos(pCursor,
+                  pWinLoc:Longint);
+var
+  curLoc:pcursorLoc;
+  saveFile:file of pcursorLoc;
+begin
+  curLoc.pCursor := pCursor;
+  curLoc.pWinLoc := pWinLoc;
+  Assign(saveFile, config^.exepath + CursorFileName);
+  Rewrite(saveFile);
+  write(saveFile, curLoc);
+  Close(saveFile);
+end;
+
+procedure restorePos(var pCursor:Longint;
+                     var pWinLoc:Longint;
+                       maxcursor:LongInt);
+var
+  curLoc:pcursorLoc;
+  saveFile:file of pcursorLoc;
+  pwheight:Byte;
+  procedure setDefault;
+  begin
+    pcursor := 0;
+    pwinloc := 0;
+  end;
+
+begin
+  if (config^.persistSelected = 1) or
+     (config^.persistSelected = 2) then
+  begin
+    Assign(saveFile, config^.exepath + CursorFileName);
+    {$I-}
+    Reset(saveFile);
+    {$I+}
+    if IOResult = 0 then
+    begin
+      {$I-}
+      read(saveFile, curLoc);
+      Close(saveFile);
+      {$i+}
+      if IOResult <> 0 then
+        setDefault
+      else
+      begin
+        pCursor := curLoc.pCursor;
+        PWinLoc := curLoc.pWinLoc;
+      end;
+      pwheight:=config^.tpos.y2-config^.tpos.y1-1;
+      if(pcursor > maxcursor) or
+        (pwinloc > maxcursor - pwheight) then
+        setDefault;
+    end
+    else
+      setDefault;
+  end
+  else
+    setDefault;
+end;
+
+
+function Launch(tid:word;
+                pcursor,
+                pwinloc:Longint ):boolean;
 {
 Execution flow:
 
@@ -494,6 +779,10 @@ var
   end;
 
 begin
+  { save every time item is selected }
+  if (config^.persistSelected = 2) then
+    SavePos(pcursor,pwinloc);
+
   {assume everything will go ok}
   Launch:=true;
   msgConsole^.logmsg(info,'Attempting to Launch title #'+inttostr(titleSets[activeSet]^.titleids^[tid])+':');
@@ -615,6 +904,7 @@ begin
            if config^.userlevel=power
              then ReadFiles(filemasks,AnyFile)
              else ReadFiles(filemasks,AnyFile-directory);
+           SortFiles(config^.ListSortField, config^.ListSortAscend);
            if vTotPicks=0
              then msgConsole^.logMsg(warning,'No files found in '+tcachedir)
              else msgConsole^.logMsg(info,'Found '+inttostr(vTotPicks)+' files in '+tcachedir);
@@ -653,13 +943,37 @@ begin
         filepath:=s;
         fsplit(filepath,dir,base,ext);
         delete(ext,1,1); {remove period}
+
+        {if using VESA modes set screen back to what is was when
+         program started... }
+        Mouse.Done;
+        if config^.customVidMode<>0 then
+          RestoreDosScreen;
+        if(config^.disableBlink) then
+          enableBlink;
+
         prepScreenForExec;
         {if we have an execution handler for this, use it,
         otherwise we use the default (fallback) handler}
+
+        {only save when acutal item is launched}
+
+        {if (config^.persistSelected = 1) then  }
+          SavePos(pcursor,pwinloc);
+        if(config^.MiSTerTurbo) then
+          setMiSTerSpeed(MiSterSpeed);
         if Handlers^.Exists(ext)=execution
           then Handlers^.handle(ext,filepath,dir)
           else Handlers^.handle('???',filepath,dir);
 
+        if(config^.MiSTerTurbo) then
+          setMiSTerSpeed(0);
+        if(config^.disableBlink) then
+          disableBlink;
+
+      { Dump Keyboard Buffer }
+        while key.KeyPressed do
+          key.Readkey;
         MsgConsole^.logmsg(info,'Switching back to '+WrkDir);
         chdir(WrkDir);
       end else begin
@@ -722,6 +1036,8 @@ const
   iconsPad=1+numMetaFlags;                 {padding on left edge for icons}
   escapeKey:word=kEsc;
   clearBlank:boolean=false;
+  searchStrMax=20;
+  kBackSpace=$08;
 
 label
   nofavorites;
@@ -731,28 +1047,32 @@ var
   b:byte;
   s:string;
   a:array[0..15] of string;
-  ch:char;
+  searchStr:String[searchStrMax];
+  index:byte;
   p:pointer;
   tid:word;
   iconPosX,iconPosY:byte;
-
-  bsl,bsr,bsm:integer;
-  bsch:char;
 
   ttbuf:PTitleStruct;
   pcursor,opcursor:longint;             {picker cursor location(s)}
   pwheight:byte;                        {picker window height}
   pwwidth:word;                         {picker window width}
   pwinloc,opwinloc:longint;             {picker window location(s)}
-
+  mouseX, mouseY:Byte;      {stuff for mouse support}
+  MouseL, mouseC, mouseR : boolean;
+  scrollPct,
+  scrollMax,
+  scrollCur:Byte;
+  Ticks: longint ABSOLUTE $0040:$006c;
+  time : longint;
   procedure updateStatusBar;
   const
     negofs=11;
   var
     s2:string;
   begin
-    s2:='#'+intPadded(pcursor,5,'0')
-       +'/'+intpadded(titleSets[activeSet]^.numTitles-1,5,'0');
+    s2:='#'+intPadded(succ(pcursor),5,'0')
+       +'/'+intpadded(titleSets[activeSet]^.numTitles,5,'0');
     screen.WriteAT(screen.width-negofs,screen.depth,
       LookTOT^.vMenuHiNorm,s2);
   end;
@@ -764,11 +1084,161 @@ var
     b:=LookTOT^.vMenuLoNorm AND $F0;
     b:=b OR (b SHR 4);
     if on
-      then screen.writeat(jcloc.x+3,jcloc.y,LookTOT^.vMenuLoNorm OR $80,s)
-      else screen.writeat(jcloc.x+3,jcloc.y,b,s);
+    { then screen.writeat(jcloc.x+3,jcloc.y,LookTOT^.vMenuLoNorm OR $80,s) }
+    { else screen.writeat(jcloc.x+3,jcloc.y,b,s);                          }
+      then screen.WriteCenter(jcloc.y,LookTOT^.vMenuLoNorm OR $80,s)
+      else screen.WriteCenter(jcloc.y,b,s);
+  end;
+
+  function isValidChar(ch:Char):Boolean;
+  begin
+    isValidChar:=TRUE;
+    {
+    if(ord(ch)  = 32)                      then exit;
+    if(ord(ch) >= 65) and (ord(ch) <= 90)  then exit;
+    if(ord(ch) >= 97) and (ord(ch) <= 122) then exit;
+    if(ord(ch) >= 48) and (ord(ch) <= 57)  then exit;
+    }
+    if not(ch in ['-', '''']) then exit;
+    isValidChar:=FALSE;
+  end;
+
+  procedure doBinarySearch;
+  var
+    index:Byte;
+    bsl,bsr,bsm:Integer;
+    bsstr:titleStrType;
+    str:String[20];
+
+  begin
+    {showStatus(true,'Seeking, please wait'); not necessary with binary search}
+
+    str[0]:=Char(0);
+    for index := 1 to Byte(searchStr[0]) do
+      if isValidChar(searchStr[index]) then
+        str:=str+searchStr[index];
+
+    {Binary search:}
+    bsl:=0; bsr:=titleSets[activeSet]^.numTitles-1; bsm:=bsr shr 1;
+    while bsl<=bsr do
+    begin
+      bsm:=(bsl+bsr) shr 1;
+      titles^.retrieve(titleSets[activeSet]^.titleIDs^[bsm],ttbuf);
+
+      bsstr[0]:=Char(0);
+
+      for index := 1 to Byte(ttbuf^.title[0]) do
+      begin
+        if isValidChar(ttbuf^.title[index]) then
+          bsstr:=bsstr+UpCase(ttbuf^.title[index]);
+        if(bsstr[0]=str[0]) then break;
+      end;
+
+      if (bsstr<str)
+        then bsl:=bsm+1
+        else bsr:=bsm-1;
+      end;
+      {The above code was written to handle duplicates, but can land on N-1.
+      To fix this, we check if that happened and adjust:}
+      if (bsstr<str) and (bsm<titleSets[activeSet]^.numTitles-1)
+        then inc(bsm);
+
+      pcursor:=bsm;
+      pwinloc:=bsm;
+      opwinloc:=-1;               {force window refresh}
+
+      {showStatus(false,'Seeking, please wait'); {not necessary with binary search}
+  end;
+
+  procedure showMiSTerSpeed;
+  begin
+    if(config^.MiSTerTurbo) then
+    begin
+      screen.writeat(screen.width-11,2, config^.colors.MiSTerTurbo, 'Turbo=');
+      case MiSTerSpeed of
+        0:screen.writeat(screen.width-5,2,
+          { (config^.colors.MiSTerTurbo and $f0) or } config^.colors.MiSTerFast,
+          'Fast  ');
+        1:screen.writeat(screen.width-5,2,
+          { (config^.colors.MiSTerTurbo and $f0) or } config^.colors.MIsTerSlow,
+          'Slow  ');
+        2:screen.writeat(screen.width-5,2,
+          { (config^.colors.MiSTerTurbo and $f0) or } config^.colors.MiSTerMedium,
+          'Medium');
+      end;
+    end;
+  end;
+
+  procedure doHome;
+  begin
+    pcursor  := 0;                    {re-home picker cursor}
+    pwinloc  := 0;                    {re-home sliding window}
+    opwinloc :=-1;                    {force a window refresh}
+  end;
+
+  procedure DoLaunch;
+  begin
+    {Mouse.Location(mouseX, MouseY);}
+    recordKeyState;
+    tmpScreenSave;
+    showStatus(true,'Preparing for launch...');
+    if config^.auditing then
+      auditLog^.newEntry(titleSets[activeSet]^.titleids^[pcursor]);
+    {Launch it!  If launch was successful, clean up:}
+    if Launch(titleSets[activeSet]^.titleids^[pcursor], pcursor, pwinloc) then
+    begin
+      if config^.pauseAfterRun then pauseForUser;
+      RestoreDOSScreen;  { <-- Why do this AFTER launch? TODO }
+
+      {if we have any goofy modes set, restore them}
+      if config^.customVidMode<>0 then
+      begin
+        case config^.customVidMode of
+          3:Monitor^.SetCondensed;
+          $100..$110:setVESA(config^.customVidMode);
+        end;
+      end;
+      if(config^.disableBlink) then
+        disableBlink;
+    end;
+    if config^.auditing
+    then auditLog^.closeEntry;
+      tmpScreenRestore;
+    restoreKeyState;
+
+    Mouse.Location(mouseX, MouseY);
+    Mouse.Done;
+    Mouse.Init;
+    Mouse.SetMouseCursorStyle(config^.MouseChar,
+                              config^.Colors.Mouse);
+    Mouse.Move(mouseX, MouseY);
+    Mouse.Confine(1,1,screen.width,screen.depth);
+    Mouse.Show;
+    Mouse.WaitForRelease;
+  end;
+
+  function MouseInWindow:Boolean;
+  begin
+    if (mouseY < pwheight + succ(config^.tpos.y1)) and
+       (mouseY > config^.tpos.y1) and
+       (MouseX < config^.tpos.x2) and
+       (MouseX > config^.tpos.x1) then
+          MouseInWindow := true
+        else
+          MouseInWindow := false;
+  end;
+
+  procedure IndexMiSTerSpeed;
+  begin
+   inc(MiSterSpeed,1);
+   if(MiSterSpeed > 2) then
+     MiSterSpeed:=0;
+   ShowMiSTerSpeed;
   end;
 
 begin
+  searchStr[0]:=Char(0);
+  showMiSTerSpeed;
   {check for short-circuit operations here and avoid the entire event loop
   if we are doing a one-off operation}
 
@@ -782,7 +1252,10 @@ begin
   if config^.userlevel=kiosk
     then escapeKey:=kAltMinus;
   with config^.tpos do Screen.Box(X1,Y1,X2,Y2,LookTOT^.vMenuLoNorm,4);
-  pcursor:=0; pwinloc:=0;
+  restorePos(pcursor,
+             pwinloc,
+             titleSets[activeSet]^.numTitles);
+
   pwwidth:=config^.tpos.x2 - config^.tpos.x1 - (iconsPad+1); {leave room for icon columns}
   p:=@s;
   updateStatusBar;
@@ -837,23 +1310,111 @@ begin
         iconPosY:=y1+dl+1;
         {Is this title a favorite?  If so, print the "favorite" icon}
         if titleMetadata^.getFlag(tid,m_favorite)
-          then screen.writeat(iconPosx,iconPosY,faviconcol,favicon)
+          then screen.writeat(iconPosx,iconPosY,faviconcol,config^.favicon)
           else screen.writeat(iconPosx,iconPosY,LookTOT^.vMenuLoNorm,' ');
         {Has this title been unpacked already?}
         dec(iconPosX);
         if titleMetadata^.getFlag(tid,m_unpacked)
-          then screen.writeat(iconPosx,iconPosY,unpiconcol,unpicon)
+          then screen.writeat(iconPosx,iconPosY,unpiconcol,config^.unpicon)
           else screen.writeat(iconPosx,iconPosY,LookTOT^.vMenuLoNorm,' ');
       end;
     end;
     {msgConsole^.logmsg(info,'Getting input');}
     key.getinput;
-
     opwinloc:=pwinloc;
     opcursor:=pcursor;
 
+    {bb7}
     {handle cursor movement}
     case key.lastkey of
+
+      513:begin {left mouse button}
+        time := Ticks;
+        repeat
+          Mouse.Status(mouseL,
+                       mouseC,
+                       mouseR,
+                       mouseX,
+                       mouseY);
+        until mouseL = false;
+        {cancel mouse button long press}
+        if (Ticks - time < 18) then
+        begin
+          if (MouseY = 2) and
+                  (MouseX >= screen.width-11) then
+          begin
+            IndexMiSTerSpeed;
+          end
+          else if (MouseY = screen.Depth) then { status bar }
+          begin
+             case mouseX of
+               1..7:begin
+                 recordKeyState;
+                 tmpScreenSave;
+                 popHelp;
+                 tmpScreenRestore;
+                 restoreKeyState;
+               end;
+               43..56:Begin
+                 DoLaunch;
+               end;
+               57..67:begin
+                 key.vLastkey := escapeKey;
+               end;
+             end;
+             Mouse.WaitForRelease;
+          end
+          else if (MouseY = 1) then { F10 }
+          begin
+            recordKeyState;
+            popAbout;
+            restoreKeyState;
+            Mouse.WaitForRelease;
+          end
+          else if (MouseX = config^.tpos.x2) then {Mouse click in scroll area}
+          begin
+            if(MouseY = config^.tpos.y1 ) then { Scroll UP }
+            begin
+              dec(pcursor,pwheight);
+              dec(pwinloc,pwheight);
+              opwinloc:=-1;
+            end
+            else if(MouseY = config^.tpos.y2) then
+            begin
+              inc(pcursor,pwheight);           { Scroll Down }
+              inc(pwinloc,pwheight);
+              opwinloc:=-1;
+            end
+            else if (MouseY > config^.tpos.y1) and { scroll % }
+                    (MouseY < config^.tpos.y2) then
+            begin
+              ScrollMax := config^.tpos.y2 - config^.tpos.y1 - 2;
+              ScrollCur := MouseY - config^.tpos.y1 - 1;
+              ScrollPCT := (ScrollCur * 100) div ScrollMax;
+            { Writeln('PCT --> ', ScrollPCT,'
+                       CUR --> ', ScrollCur,'
+                       MAX --> ',ScrollMax); }
+              pwinloc   := (titleSets[activeSet]^.numTitles - pwheight) *
+                            ScrollPct div 100;
+              pcursor   := (titleSets[activeSet]^.numTitles -1) *
+                            ScrollPct div 100;
+              opwinloc  := -1;
+            end;
+          end { mouse click in scroll area }
+          else if (MouseInWindow) then
+          begin
+            pcursor := pwinloc + mouseY - succ(config^.tpos.y1);
+            opwinloc:=-1;
+          end;
+        end; { time - ticks > 18 }
+      end; { 513 }
+      523:begin { left mouse button double click }
+          if (MouseInWindow) then
+            DoLaunch;
+          end;
+      514:begin {right mouse button}
+            key.vLastkey := escapeKey;
+          end;
       kUp:begin
         dec(pcursor);
         if pcursor<pwinloc then dec(pwinloc);
@@ -873,54 +1434,59 @@ begin
         opwinloc:=-1;                   {force a window refresh}
       end;
       kHome:begin
-        pcursor:=0;                     {re-home picker cursor}
-        pwinloc:=0;                     {re-home sliding window}
-        opwinloc:=-1;                   {force a window refresh}
+        doHome;
       end;
       kEnd:begin
         pcursor:=titleSets[activeSet]^.numTitles-1; {point to last title}
         pwinloc:=pcursor;               {this will get clamped later}
         opwinloc:=-1;                   {force a window refresh}
       end;
+      kF3:begin
+        IndexMiSTerSpeed;
+      end;
+      kF4:begin
+        if config^.Joystick then
+        begin
+          Joystick_Init(true);
+        end;
+      end;
+      kBackSpace:begin
+        if(Byte(searchStr[0])>0) then
+        begin
+          searchStr[0]:=Char(Byte(searchStr[0])-1);
+          screen.writeat(jcloc.x+Byte(searchStr[0]),jcloc.y,LookTOT^.vMenuLoHot, ' ');
+          screen.gotoxy(jcloc.x+Byte(searchStr[0]),jcloc.y);
+          if(Byte(searchStr[0])=0) then
+            doHome
+          else
+            doBinarySearch;
+        end;
+      end;
+      kDel:begin
+        if(Byte(searchStr[0])>0) then
+        begin
+          screen.ClearText(jcloc.x, jcloc.y, jcloc.x+Pred(Byte(searchStr[0])), jcloc.y);
+          screen.gotoxy(jcloc.x, jcloc.y);
+          searchStr[0] := char(0);
+        end;
+        doHome;
+      end;
+      ord(' '),
+      ord('-'),
+      ord('.'),
+      ord(''''),
       ord('0')..ord('9'),
       ord('A')..ord('Z'),
       ord('a')..ord('z'):begin
-        {Crude "search by letter" until we implement actual search-as-you-type}
-        ch:=upcase(chr(key.lastkey));
-        screen.writeat(jcloc.x,jcloc.y,LookTOT^.vMenuLoHot,ch);
-        {showStatus(true,'Seeking, please wait'); not necessary with binary search}
-
-        (* Slow, linear search
-        for w:=0 to titleSets[activeSet].numTitles-1 do begin
-          {check first character only}
-          if upcase(titles^.retrieve1c(titleSets[activeSet].titleIDs^[w]))=ch then begin
-            pcursor:=w;
-            pwinloc:=w;
-            opwinloc:=-1;               {force window refresh}
-            break;
+        if (Byte(searchStr[0])<searchStrMax)
+             (* Don't let first char be space *)
+          and ((Byte(searchStr[0])>0) or (key.lastkey<>ord(' ')))then
+          begin
+            searchStr:=searchStr+UpCase(chr(key.lastkey));
+            screen.writeat(jcloc.x,jcloc.y,LookTOT^.vMenuLoHot, searchStr); (*ch);*)
+            screen.gotoxy(jcloc.x+Byte(searchStr[0]),jcloc.y);
+            doBinarySearch;
           end;
-        end;
-        *)
-
-        {Binary search:}
-        bsl:=0; bsr:=titleSets[activeSet]^.numTitles-1; bsm:=bsr shr 1;
-        while bsl<=bsr do begin
-          bsm:=(bsl+bsr) shr 1;
-          bsch:=upcase(titles^.retrieve1c(titleSets[activeSet]^.titleIDs^[bsm]));
-          if bsch<ch
-            then bsl:=bsm+1
-            else bsr:=bsm-1;
-        end;
-        {The above code was written to handle duplicates, but can land on N-1.
-        To fix this, we check if that happened and adjust:}
-        if (bsch<ch) and (bsm<titleSets[activeSet]^.numTitles-1)
-          then inc(bsm);
-
-        pcursor:=bsm;
-        pwinloc:=bsm;
-        opwinloc:=-1;               {force window refresh}
-
-        {showStatus(false,'Seeking, please wait'); not necessary with binary search}
       end;
       kF2:begin {Toggle favorite for where the picker cursor is on}
         with titleMetadata^ do begin
@@ -962,34 +1528,12 @@ begin
           titleSets[activeSet]:=nil;
           dec(activeSet);
         end;
-        pcursor:=0;
-        pwinloc:=0;
-        opwinloc:=-1;                   {force a window refresh}
+        doHome;
         favson:=not favson;             {toggle "favorites on" status}
 nofavorites:
       end;
       kEnter:begin {LAUNCH!}
-        recordKeyState;
-        tmpScreenSave;
-        showStatus(true,'Preparing for launch...');
-        if config^.auditing
-          then auditLog^.newEntry(titleSets[activeSet]^.titleids^[pcursor]);
-        {Launch it!  If launch was successful, clean up:}
-        if Launch(titleSets[activeSet]^.titleids^[pcursor]) then begin
-          if config^.pauseAfterRun then pauseForUser;
-          RestoreDOSScreen;
-          {if we have any goofy modes set, restore them}
-          if config^.customVidMode<>0 then begin
-            case config^.customVidMode of
-              3:Monitor^.SetCondensed;
-              $100..$110:setVESA(config^.customVidMode);
-            end;
-          end;
-        end;
-        if config^.auditing
-          then auditLog^.closeEntry;
-        tmpScreenRestore;
-        restoreKeyState;
+        DoLaunch;
       end;
       kCtlF3:begin {show debug console}
         MsgConsole^.show;
@@ -1069,6 +1613,9 @@ begin
 
   s:=config^.startupDir; {grab startup dir before we trash object}
 
+  if(config^.disableBlink) then
+    enableBlink;
+
   if config^.auditing then dispose(auditLog,done);
   dispose(files,done);
   dispose(titles,done);
@@ -1077,9 +1624,13 @@ begin
   dispose(config,done);
   dispose(DOSScreen,done);
   tmpScreenRestore; {this will also deallocate it}
+  OldScreenParams.cursorpos:=$0000;
   RestoreDOSScreen;
 
   writeln('Exiting '+TDLtitleFull);
+  {$IFDEF SHOWBUILDINFO}
+  writeln(TDLbuildInfo);
+  {$ENDIF}
   writeln('Have a nice DOS!');
 
   {$IFDEF FINAL}
